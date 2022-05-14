@@ -87,6 +87,8 @@ LCDFont* font = NULL;
 static char* gTweetbuf = NULL;
 static size_t gTweetbufLen = 0;
 
+static PlaydateAPI* gPdApi;
+
 #ifdef TARGET_PLAYDATE
 
 // 1.11: from 0x80484dc
@@ -141,9 +143,16 @@ static bool EnableWifiApi(PlaydateAPIExt* pd_ext) {
   return false;
 }
 
+// both strings are owned by callback data
+struct LuaCallbackData {
+  char* lua_function_name;
+  char* lua_argument;
+};
+
 bool GetCallback(int http_status, void* buf, size_t length, size_t length2,
                  void* callback_data) {
-  PlaydateAPI* pd = callback_data;
+  PlaydateAPI* pd = gPdApi;
+  struct LuaCallbackData* lua_data = callback_data;
   pd->system->logToConsole("GetCallback %d %p %ld %ld %p\n", http_status, buf,
                            length, length2, callback_data);
   if (http_status != 200) {
@@ -159,29 +168,54 @@ bool GetCallback(int http_status, void* buf, size_t length, size_t length2,
   return true;
 }
 
-size_t my_strlen(const char* a) {
-  size_t l = 0;
-  while (*a++) {
-    l++;
+static int LuaInit(lua_State* L) {
+  PlaydateAPI* pd = gPdApi;
+  PlaydateAPIExt* pd_ext = (PlaydateAPIExt*)pd;
+  if (!EnableWifiApi(pd_ext)) {
+    pd->system->error("Can't enable wifi API.");
+    return 0;
   }
-  return l;
+  return 0;
 }
 
-char* LoadApiKey(PlaydateAPI* pd) {
-  SDFile* file = pd->file->open("apikey.txt", kFileRead | kFileReadData);
-  if (!file) {
-    pd->system->error("Can't open apikey.txt!");
-    return NULL;
+static int LuaGet(lua_State* L) {
+  PlaydateAPI* pd = gPdApi;
+  PlaydateAPIExt* pd_ext = (PlaydateAPIExt*)pd;
+  size_t headers_length = 0;
+  const char* headers_blob_src = pd->lua->getArgBytes(3, &headers_length);
+  char* headers_blob = NULL;
+  if (headers_length) {
+    headers_blob = pd->system->realloc(NULL, headers_length + 1);
+    for (int i = 0; i < headers_length; i++) {
+      headers_blob[i] = headers_blob_src[i];
+    }
+    headers_blob[headers_length] = 0;
   }
-  pd->file->seek(file, 0, SEEK_END);
-  int len = pd->file->tell(file);
-  pd->file->seek(file, 0, SEEK_SET);
-  char* buf = pd->system->realloc(NULL, len);
-  pd->file->read(file, buf, len);
-  pd->file->close(file);
-  // assuming the .txt ends in a newline...
-  buf[len - 1] = 0;
-  return buf;
+
+  struct LuaCallbackData* callback_data =
+      pd->system->realloc(NULL, sizeof(struct LuaCallbackData));
+  pd->system->formatString(&callback_data->lua_function_name, "%s",
+                           pd->lua->getArgString(4));
+  pd->system->formatString(&callback_data->lua_argument, "%s",
+                           pd->lua->getArgString(5));
+  // pd->system->logToConsole("%s %d", headers_blob, headers_length);
+  pd_ext->wifi->get(pd->lua->getArgString(1), pd->lua->getArgString(2),
+                    headers_blob, headers_length, GetCallback, callback_data);
+  return 0;
+}
+
+static const lua_reg kApiRegs[] = {
+    {.name = "init", .func = &LuaInit},
+    {.name = "get", .func = &LuaGet},
+    {.name = NULL, .func = NULL},
+};
+
+void RegisterLuaApi(PlaydateAPI* pd) {
+  const char* err = NULL;
+  if (!pd->lua->registerClass("wdb_pdwifi", kApiRegs, /*vals=*/NULL,
+                              /*isstatic=*/true, &err)) {
+    pd->system->error("Register Lua API failed: %s", err);
+  }
 }
 
 #ifdef _WINDLL
@@ -190,46 +224,9 @@ __declspec(dllexport)
     int eventHandler(PlaydateAPI* pd, PDSystemEvent event, uint32_t arg) {
   (void)arg;  // arg is currently only used for event = kEventKeyPressed
 
-  if (event == kEventInit) {
-    const char* err;
-    font = pd->graphics->loadFont(fontpath, &err);
-
-    if (font == NULL)
-      pd->system->error("%s:%i Couldn't load font %s: %s", __FILE__, __LINE__,
-                        fontpath, err);
-
-    // Note: If you set an update callback in the kEventInit handler, the system
-    // assumes the game is pure C and doesn't run any Lua code in the game
-    pd->system->setUpdateCallback(update, pd);
-    PlaydateAPIExt* pd_ext = (PlaydateAPIExt*)pd;
-    if (!EnableWifiApi(pd_ext)) {
-      pd->system->error("Can't enable wifi API.");
-      return 0;
-    }
-    char* apikey = LoadApiKey(pd);
-    char* headers_blob = NULL;
-    pd->system->formatString(&headers_blob, "Authorization: %s\r\n", apikey);
-    pd->system->realloc(apikey, 0);
-    pd_ext->wifi->get("api.twitter.com",
-                      "/1.1/statuses/user_timeline.json?screen_name=zhuowei",
-                      headers_blob, my_strlen(headers_blob), GetCallback, pd);
+  if (event == kEventInitLua) {
+    gPdApi = pd;
+    RegisterLuaApi(pd);
   }
-
   return 0;
-}
-
-static int update(void* userdata) {
-  PlaydateAPI* pd = userdata;
-
-  pd->graphics->clear(kColorWhite);
-  pd->graphics->setFont(font);
-
-  if (!gTweetbuf) {
-    pd->graphics->drawText("Loading...", sizeof("Loading...") - 1,
-                           kASCIIEncoding, 0, 0);
-  } else {
-    pd->graphics->drawText(gTweetbuf, gTweetbufLen > 100 ? 100 : gTweetbufLen,
-                           kASCIIEncoding, 0, 0);
-  }
-  return 1;
 }
