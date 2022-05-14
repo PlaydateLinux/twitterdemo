@@ -147,26 +147,37 @@ static bool EnableWifiApi(PlaydateAPIExt* pd_ext) {
 struct LuaCallbackData {
   char* lua_function_name;
   char* lua_argument;
+  int http_status;
+  void* return_buf;
+  size_t return_length;
+  size_t return_length2;
 };
+
+struct LuaCallbackData* gReadyCallback;
 
 bool GetCallback(int http_status, void* buf, size_t length, size_t length2,
                  void* callback_data) {
+  // This is called on a thread without Lua context
   PlaydateAPI* pd = gPdApi;
   struct LuaCallbackData* lua_data = callback_data;
   pd->system->logToConsole("GetCallback %d %p %ld %ld %p\n", http_status, buf,
                            length, length2, callback_data);
-  if (http_status != 200) {
-    pd->system->error("Failed to fetch: status = %d", http_status);
-    return true;
-  }
-  gTweetbuf = pd->system->realloc(NULL, length);
-  gTweetbufLen = length;
-  char* src_buf = buf;
+  lua_data->http_status = http_status;
+  char* return_buf = pd->system->realloc(0, length + 1);
   for (int i = 0; i < length; i++) {
-    gTweetbuf[i] = src_buf[i];
+    return_buf[i] = ((char*)buf)[i];
   }
+  return_buf[length] = 0;  // Why???
+  lua_data->return_buf = return_buf;
+  lua_data->return_length = length;
+  lua_data->return_length2 = length2;
+  // TODO(zhuowei): support concurrent requests by stashing multiple of these
+  // ... is there thread safety issues/atomics I should use for this?
+  gReadyCallback = lua_data;
   return true;
 }
+
+void RunCallback(PlaydateAPI* pd, struct LuaCallbackData* lua_data) { return; }
 
 static int LuaInit(lua_State* L) {
   PlaydateAPI* pd = gPdApi;
@@ -194,6 +205,7 @@ static int LuaGet(lua_State* L) {
 
   struct LuaCallbackData* callback_data =
       pd->system->realloc(NULL, sizeof(struct LuaCallbackData));
+  __builtin_memset(callback_data, 0, sizeof(struct LuaCallbackData));
   pd->system->formatString(&callback_data->lua_function_name, "%s",
                            pd->lua->getArgString(4));
   pd->system->formatString(&callback_data->lua_argument, "%s",
@@ -204,9 +216,28 @@ static int LuaGet(lua_State* L) {
   return 0;
 }
 
+static int LuaPoll(lua_State* L) {
+  PlaydateAPI* pd = gPdApi;
+  if (gReadyCallback) {
+    struct LuaCallbackData* callback_data = gReadyCallback;
+    gReadyCallback = NULL;
+    pd->lua->pushInt(callback_data->http_status);
+    pd->lua->pushBytes(callback_data->return_buf, callback_data->return_length);
+    pd->lua->pushInt(callback_data->return_length2);
+    pd->lua->pushString(callback_data->lua_argument);
+    pd->system->realloc(callback_data->return_buf, 0);
+    pd->system->realloc(callback_data->lua_argument, 0);
+    pd->system->realloc(callback_data->lua_function_name, 0);
+    pd->system->realloc(callback_data, 0);
+    return 4;
+  }
+  return 0;
+}
+
 static const lua_reg kApiRegs[] = {
     {.name = "init", .func = &LuaInit},
     {.name = "get", .func = &LuaGet},
+    {.name = "poll", .func = &LuaPoll},
     {.name = NULL, .func = NULL},
 };
 
