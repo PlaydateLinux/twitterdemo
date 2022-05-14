@@ -82,7 +82,25 @@ const char* fontpath = "/System/Fonts/Asheville-Sans-14-Bold.pft";
 LCDFont* font = NULL;
 
 #ifdef TARGET_PLAYDATE
-static bool EnableWifiApiPlaydate() { return false; }
+
+// 1.11: from 0x80484dc
+const PlaydateWifiAPI gWifiApi = {
+    .open = (void*)0x080615d1,
+    .close = (void*)0x08061721,
+    .send = (void*)0x08061855,
+    .read = (void*)0x08061945,
+    .get = (void*)0x08060b65,
+    .get_chunked = (void*)0x08060bc5,
+    .post = (void*)0x08060bf1,
+    .post_chunked = (void*)0x08060c55,
+};
+
+static bool EnableWifiApiPlaydate(PlaydateAPI* pd) {
+  // 1.11
+  PlaydateAPIExt* pd_ext = (PlaydateAPIExt*)pd;
+  pd_ext->wifi = (PlaydateWifiAPI*)&gWifiApi;
+  return true;
+}
 #endif
 
 #ifdef __APPLE__
@@ -99,10 +117,13 @@ static bool EnableWifiApiMacOSSimulator() {
 
 static bool EnableWifiApi(PlaydateAPIExt* pd_ext) {
   if (pd_ext->wifi) {
+    // Wi-Fi's already unlocked: we're running as a system app (.pdx located on
+    // the System partition)
     return true;
   }
+  // Pretend to be a system app
 #ifdef TARGET_PLAYDATE
-  if (EnableWifiApiPlaydate()) {
+  if (EnableWifiApiPlaydate(&pd_ext->pd)) {
     return true;
   }
 #endif
