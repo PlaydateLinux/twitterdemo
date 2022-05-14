@@ -1,4 +1,5 @@
 import "CoreLibs/graphics"
+import "CoreLibs/ui"
 
 local tweets = nil
 
@@ -13,7 +14,9 @@ local apikey_file = playdate.file.open("apikey.txt")
 local auth_token = apikey_file:readline()
 apikey_file:close()
 
-local username = "zhuowei"
+local username_file = playdate.file.open("username.txt")
+local username = username_file:readline()
+username_file:close()
 
 function do_get()
   -- TODO(zhuowei): only one concurrent request is supported right now.
@@ -33,7 +36,7 @@ function do_poll()
   end
   assert(data_arg == "get_api", "unhandled callback?")
 
-  print(http_status, buf, total_size)
+  -- print(http_status, buf, total_size)
   if http_status ~= 200 then
     status = kStatusError
     errorString = "Error: " .. http_status
@@ -41,7 +44,21 @@ function do_poll()
   end
   tweets = json.decode(buf)
   status = kStatusSuccess
+  repopulate_gridview()
+end
 
+local gridview = playdate.ui.gridview.new(0, 64)
+gridview:setCellPadding(4, 4, 4, 4)
+local gridScrollY = 0
+
+function gridview:drawCell(section, row, column, selected, x, y, width, height)
+  playdate.graphics.drawTextInRect(tweets[row]["text"], x, y, width, height, 0, "...")
+end
+
+function repopulate_gridview()
+  gridview:setNumberOfRows(#tweets)
+  gridScrollY = 0
+  gridview:setScrollPosition(0, gridScrollY, false)
 end
 
 local simulate = false
@@ -49,6 +66,7 @@ local simulate = false
 if simulate then
   tweets = json.decodeFile("demo_tweets.json")
   status = kStatusSuccess
+  repopulate_gridview()
 else
   wdb_pdwifi.init()
   do_get()
@@ -59,12 +77,15 @@ function playdate.update()
   -- so we instead just set a flag when it arrives, then call poll to run callbacks
   -- right now this only handles one at a time :(
   do_poll()
+  gridScrollY += playdate.getCrankChange()
+  gridview:setScrollPosition(0, gridScrollY, false)
   playdate.graphics.clear()
   if status == kStatusLoading then
     playdate.graphics.drawText("loading...", 0, 0)
   elseif status == kStatusError then
     playdate.graphics.drawText(errorString, 0, 0)
   else
-    playdate.graphics.drawTextInRect(tweets[1]["text"], 0, 0, playdate.display.getWidth(), 48)
+    gridview:drawInRect(0, 0, playdate.display.getWidth(), playdate.display.getHeight())
   end
+  playdate.timer:updateTimers()
 end
