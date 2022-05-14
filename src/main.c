@@ -47,6 +47,9 @@ struct PlaydateWifiAPI {
   ssize_t (*read)(int handle, void* buf, size_t size);
   /**
    * Perform a GET request to the given URL.
+   * Note: headers should be allocated via malloc, pd->system->realloc or
+   * pd->system->formatString - this function takes ownership of the buffer and
+   * frees it when it completes.
    */
   bool (*get)(const char* hostname, const char* path, const char* headers,
               size_t headers_length, PlaydateHttpCallback callback,
@@ -80,6 +83,9 @@ typedef struct PlaydateAPIExt PlaydateAPIExt;
 static int update(void* userdata);
 const char* fontpath = "/System/Fonts/Asheville-Sans-14-Bold.pft";
 LCDFont* font = NULL;
+
+static char* gTweetbuf = NULL;
+static size_t gTweetbufLen = 0;
 
 #ifdef TARGET_PLAYDATE
 
@@ -140,7 +146,42 @@ bool GetCallback(int http_status, void* buf, size_t length, size_t length2,
   PlaydateAPI* pd = callback_data;
   pd->system->logToConsole("GetCallback %d %p %ld %ld %p\n", http_status, buf,
                            length, length2, callback_data);
+  if (http_status != 200) {
+    pd->system->error("Failed to fetch: status = %d", http_status);
+    return true;
+  }
+  gTweetbuf = pd->system->realloc(NULL, length);
+  gTweetbufLen = length;
+  char* src_buf = buf;
+  for (int i = 0; i < length; i++) {
+    gTweetbuf[i] = src_buf[i];
+  }
   return true;
+}
+
+size_t my_strlen(const char* a) {
+  size_t l = 0;
+  while (*a++) {
+    l++;
+  }
+  return l;
+}
+
+char* LoadApiKey(PlaydateAPI* pd) {
+  SDFile* file = pd->file->open("apikey.txt", kFileRead | kFileReadData);
+  if (!file) {
+    pd->system->error("Can't open apikey.txt!");
+    return NULL;
+  }
+  pd->file->seek(file, 0, SEEK_END);
+  int len = pd->file->tell(file);
+  pd->file->seek(file, 0, SEEK_SET);
+  char* buf = pd->system->realloc(NULL, len);
+  pd->file->read(file, buf, len);
+  pd->file->close(file);
+  // assuming the .txt ends in a newline...
+  buf[len - 1] = 0;
+  return buf;
 }
 
 #ifdef _WINDLL
@@ -165,39 +206,30 @@ __declspec(dllexport)
       pd->system->error("Can't enable wifi API.");
       return 0;
     }
-#ifdef __APPLE__
-    fprintf(stderr, "%p\n", pd_ext->wifi->get);
-#endif
-    pd_ext->wifi->get("example.com", "/", NULL, 0, GetCallback, pd);
+    char* apikey = LoadApiKey(pd);
+    char* headers_blob = NULL;
+    pd->system->formatString(&headers_blob, "Authorization: %s\r\n", apikey);
+    pd->system->realloc(apikey, 0);
+    pd_ext->wifi->get("api.twitter.com",
+                      "/1.1/statuses/user_timeline.json?screen_name=zhuowei",
+                      headers_blob, my_strlen(headers_blob), GetCallback, pd);
   }
 
   return 0;
 }
-
-#define TEXT_WIDTH 86
-#define TEXT_HEIGHT 16
-
-int x = (400 - TEXT_WIDTH) / 2;
-int y = (240 - TEXT_HEIGHT) / 2;
-int dx = 1;
-int dy = 2;
 
 static int update(void* userdata) {
   PlaydateAPI* pd = userdata;
 
   pd->graphics->clear(kColorWhite);
   pd->graphics->setFont(font);
-  pd->graphics->drawText("Hello World!", strlen("Hello World!"), kASCIIEncoding,
-                         x, y);
 
-  x += dx;
-  y += dy;
-
-  if (x < 0 || x > LCD_COLUMNS - TEXT_WIDTH) dx = -dx;
-
-  if (y < 0 || y > LCD_ROWS - TEXT_HEIGHT) dy = -dy;
-
-  pd->system->drawFPS(0, 0);
-
+  if (!gTweetbuf) {
+    pd->graphics->drawText("Loading...", sizeof("Loading...") - 1,
+                           kASCIIEncoding, 0, 0);
+  } else {
+    pd->graphics->drawText(gTweetbuf, gTweetbufLen > 100 ? 100 : gTweetbufLen,
+                           kASCIIEncoding, 0, 0);
+  }
   return 1;
 }
