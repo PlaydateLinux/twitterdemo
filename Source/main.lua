@@ -1,5 +1,6 @@
 import "CoreLibs/graphics"
 import "CoreLibs/ui"
+import "CoreLibs/keyboard"
 
 local tweets = nil
 
@@ -61,6 +62,28 @@ function repopulate_gridview()
   gridview:setScrollPosition(0, gridScrollY, false)
 end
 
+function playdate.keyboard.keyboardWillHideCallback(pressed_ok)
+  if pressed_ok then
+    username = playdate.keyboard.text
+    local username_file = playdate.file.open("username.txt", playdate.file.kFileWrite)
+    username_file:write(username .. "\n")
+    username_file:close()
+    status = kStatusLoading
+    do_get()
+  else
+    status = kStatusSuccess
+  end
+end
+
+local myInputHandlers = {
+  AButtonDown = function()
+    status = kStatusEnterName
+    playdate.keyboard.show(username)
+  end
+}
+
+playdate.inputHandlers.push(myInputHandlers)
+
 local simulate = false
 
 if simulate then
@@ -77,14 +100,16 @@ function playdate.update()
   -- so we instead just set a flag when it arrives, then call poll to run callbacks
   -- right now this only handles one at a time :(
   do_poll()
-  gridScrollY += playdate.getCrankChange()
-  gridview:setScrollPosition(0, gridScrollY, false)
   playdate.graphics.clear()
   if status == kStatusLoading then
     playdate.graphics.drawText("loading...", 0, 0)
   elseif status == kStatusError then
     playdate.graphics.drawText(errorString, 0, 0)
+  elseif status == kStatusEnterName then
+    playdate.graphics.drawText(playdate.keyboard.text, 0, 0)
   else
+    gridScrollY += playdate.getCrankChange()
+    gridview:setScrollPosition(0, gridScrollY, false)
     gridview:drawInRect(0, 0, playdate.display.getWidth(), playdate.display.getHeight())
   end
   playdate.timer:updateTimers()
