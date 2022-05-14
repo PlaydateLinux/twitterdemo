@@ -81,11 +81,6 @@ struct PlaydateAPIExt {
 typedef struct PlaydateAPIExt PlaydateAPIExt;
 
 static int update(void* userdata);
-const char* fontpath = "/System/Fonts/Asheville-Sans-14-Bold.pft";
-LCDFont* font = NULL;
-
-static char* gTweetbuf = NULL;
-static size_t gTweetbufLen = 0;
 
 static PlaydateAPI* gPdApi;
 

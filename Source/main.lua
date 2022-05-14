@@ -7,6 +7,7 @@ local tweets = nil
 local kStatusLoading = 0
 local kStatusError = 1
 local kStatusSuccess = 2
+local kStatusEnterName = 3
 local status = kStatusLoading
 
 local errorString = ""
